@@ -41,6 +41,7 @@ helm upgrade -i \
   --create-namespace \
   --namespace dra-example-driver \
   --set webhook.enabled=true \
-  --set kubeletPlugin.numDevices=12 \
+  --set kubeletPlugin.numDevices=10 \
+  --set kubeletPlugin.enableDeviceMetadata=true \
   dra-example-driver \
   ${HELM_CHART_PATH}

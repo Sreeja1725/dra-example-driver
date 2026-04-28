@@ -21,6 +21,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -43,7 +44,12 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/restmapper"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/dynamic-resource-allocation/api/metadata"
+	"k8s.io/dynamic-resource-allocation/devicemetadata"
 )
 
 var rootDir, currentDir, demoManifestsDir string
@@ -53,6 +59,22 @@ var restMapper meta.RESTMapper
 
 const driverNamespace = "dra-example-driver"
 const driverPodSelector = "app.kubernetes.io/component=kubeletplugin"
+var observedGPUs map[string]string
+var demoFiles = []string{
+	"gpu-test1.yaml",
+	"gpu-test2.yaml",
+	"gpu-test3.yaml",
+	"gpu-test7.yaml", // deploying this earlier to ensure the pod can access in-use devices and does not block future allocations of the same devices
+	"gpu-test4.yaml",
+	"gpu-test5.yaml",
+	"gpu-test6.yaml",
+	"gpu-test8.yaml",
+	"gpu-test9.yaml",
+	"gpu-test10.yaml",
+}
+var clientset *kubernetes.Clientset
+var dynamicClient dynamic.Interface
+var restConfig *rest.Config
 
 func init() {
 	currentDir, _ = os.Getwd()
@@ -84,6 +106,7 @@ var _ = BeforeSuite(func(ctx SpecContext) {
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 	config, err := kubeConfig.ClientConfig()
 	Expect(err).NotTo(HaveOccurred())
+	restConfig = config
 
 	clientset, err = kubernetes.NewForConfig(config)
 	Expect(err).NotTo(HaveOccurred())
@@ -569,5 +592,60 @@ func verifySharedGPUGroup(ctx context.Context, namespace string, group sharingGr
 			verifyGPUProperties(g, logs, namespace, member.pod, member.container, gpus,
 				group.expectedStrategy, group.expectedProperty, group.expectedPropValue)
 		}, checkPodLogsTimeout, checkPodLogsInterval).Should(Succeed())
+// execInContainer executes a command inside a container and returns stdout.
+func execInContainer(namespace, podName, containerName string, command []string) (string, error) {
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(namespace).
+		Name(podName).
+		SubResource("exec").
+		VersionedParams(&v1.PodExecOptions{
+			Container: containerName,
+			Command:   command,
+			Stdout:    true,
+			Stderr:    true,
+		}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(restConfig, "POST", req.URL())
+	if err != nil {
+		return "", fmt.Errorf("create SPDY executor: %w", err)
 	}
+
+	var stdout, stderr bytes.Buffer
+	err = exec.StreamWithContext(context.TODO(), remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if err != nil {
+		return "", fmt.Errorf("exec in %s/%s container %s failed: %w, stderr: %s",
+			namespace, podName, containerName, err, stderr.String())
+	}
+	return stdout.String(), nil
 }
+
+// readDeviceMetadata reads a device metadata file from inside a container
+// and decodes it into a metadata.DeviceMetadata struct.
+func readDeviceMetadata(namespace, podName, containerName, metadataPath string) (*metadata.DeviceMetadata, error) {
+	raw, err := execInContainer(namespace, podName, containerName, []string{"cat", metadataPath})
+	if err != nil {
+		return nil, err
+	}
+
+	var dm metadata.DeviceMetadata
+	if err := devicemetadata.DecodeMetadataFromStream(json.NewDecoder(bytes.NewReader([]byte(raw))), &dm); err != nil {
+		return nil, fmt.Errorf("decode metadata from %s: %w", metadataPath, err)
+	}
+	return &dm, nil
+}
+
+var _ = AfterSuite(func(ctx SpecContext) {
+	// Pod deletion should be fast (less than the default grace period of 30s)
+	// see https://github.com/kubernetes/kubernetes/issues/127188 for details
+	for _, file := range demoFiles {
+		absPath := filepath.Join(demoManifestsDir, file)
+		Eventually(func() error {
+			deleteManifest(ctx, dynamicClient, absPath)
+			return nil
+		}, "25s", "1s").Should(Succeed(), fmt.Sprintf("Failed to delete resources in %s within 25s", file))
+	}
+})
