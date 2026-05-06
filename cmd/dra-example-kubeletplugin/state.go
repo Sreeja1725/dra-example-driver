@@ -48,6 +48,7 @@ type DeviceState struct {
 	checkpointManager checkpointmanager.CheckpointManager
 	configDecoder     runtime.Decoder
 	configHandler     profiles.ConfigHandler
+	profile           profiles.Profile
 }
 
 func NewDeviceState(config *Config) (*DeviceState, error) {
@@ -103,6 +104,7 @@ func NewDeviceState(config *Config) (*DeviceState, error) {
 		checkpointManager: checkpointManager,
 		configDecoder:     decoder,
 		configHandler:     configHandler,
+		profile:           config.profile,
 	}
 
 	checkpoints, err := state.checkpointManager.ListCheckpoints()
@@ -236,17 +238,28 @@ func (s *DeviceState) prepareDevices(claim *resourceapi.ResourceClaim) (profiles
 	// of device allocation results.
 	perDeviceCDIContainerEdits := make(profiles.PerDeviceCDIContainerEdits)
 	for config, results := range configResultsMap {
-		// Apply the config to the list of results associated with it.
 		containerEdits, err := s.configHandler.ApplyConfig(config, results)
 		if err != nil {
 			return nil, fmt.Errorf("error applying config: %w", err)
 		}
 
-		// Merge any new container edits with the overall per device map.
-		for k, v := range containerEdits {
-			perDeviceCDIContainerEdits[k] = v
-		}
+		mergeEdits(perDeviceCDIContainerEdits, containerEdits)
 	}
+
+	// Give the profile a chance to perform claim-scoped side effects (such
+	// as writing KEP-5304 device-metadata files for KubeVirt) and to
+	// contribute additional CDI edits keyed by device name. The vfio and
+	// mdev profiles use this hook; the gpu profile inherits a no-op.
+	var allResults []*resourceapi.DeviceRequestAllocationResult
+	for _, results := range configResultsMap {
+		allResults = append(allResults, results...)
+	}
+	allocatable := map[string]resourceapi.Device(s.allocatable)
+	claimEdits, err := s.profile.PrepareClaim(claim, allocatable, allResults)
+	if err != nil {
+		return nil, fmt.Errorf("profile prepare claim: %w", err)
+	}
+	mergeEdits(perDeviceCDIContainerEdits, claimEdits)
 
 	// Walk through each config and its associated device allocation results
 	// and construct the list of prepared devices to return.
@@ -271,6 +284,9 @@ func (s *DeviceState) prepareDevices(claim *resourceapi.ResourceClaim) (profiles
 }
 
 func (s *DeviceState) unprepareDevices(claimUID string, devices profiles.PreparedDevices) error {
+	if cleaner, ok := s.profile.(profiles.ClaimUnpreparer); ok {
+		return cleaner.UnprepareClaim(claimUID)
+	}
 	return nil
 }
 
@@ -284,6 +300,22 @@ func (s *DeviceState) checkAdminAccess(claim *resourceapi.ResourceClaim) bool {
 		}
 	}
 	return false
+}
+
+// mergeEdits appends src into dst on a per-device basis. Empty entries in
+// src are ignored. ContainerEdits.Append handles deduplication and ordering.
+func mergeEdits(dst profiles.PerDeviceCDIContainerEdits, src profiles.PerDeviceCDIContainerEdits) {
+	for device, edit := range src {
+		if edit == nil {
+			continue
+		}
+		if existing := dst[device]; existing != nil {
+			existing.Append(edit)
+			dst[device] = existing
+			continue
+		}
+		dst[device] = edit
+	}
 }
 
 // GetOpaqueDeviceConfigs returns an ordered list of the configs contained in possibleConfigs for this driver.

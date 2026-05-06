@@ -48,6 +48,33 @@ func (pds PreparedDevices) GetDevices() []*drapbv1.Device {
 type Profile interface {
 	ConfigHandler
 	EnumerateDevices() (resourceslice.DriverResources, error)
+	// PrepareClaim is invoked once per ResourceClaim during NodePrepareResources
+	// after opaque configs have been applied. Profiles may use this hook to
+	// perform claim-scoped side-effects (e.g. writing KEP-5304 metadata files
+	// for KubeVirt) and may return additional per-device CDI container edits
+	// that will be merged with anything ApplyConfig produced.
+	//
+	// `allocatable` provides the full advertised attribute/capacity set for
+	// each device on this node so profiles can read attributes (such as the
+	// PCI bus ID) without having to re-derive them.
+	PrepareClaim(claim *resourceapi.ResourceClaim, allocatable map[string]resourceapi.Device, results []*resourceapi.DeviceRequestAllocationResult) (PerDeviceCDIContainerEdits, error)
+}
+
+// NoopPrepareClaim is a default PrepareClaim implementation for profiles
+// that do not need any claim-scoped side-effects.
+type NoopPrepareClaim struct{}
+
+// PrepareClaim implements [Profile.PrepareClaim].
+func (NoopPrepareClaim) PrepareClaim(_ *resourceapi.ResourceClaim, _ map[string]resourceapi.Device, _ []*resourceapi.DeviceRequestAllocationResult) (PerDeviceCDIContainerEdits, error) {
+	return nil, nil
+}
+
+// ClaimUnpreparer is an optional interface profiles may implement to clean
+// up any claim-scoped artifacts (such as on-disk metadata files) when a
+// ResourceClaim is being unprepared. Profiles that do not need cleanup do
+// not need to implement this interface.
+type ClaimUnpreparer interface {
+	UnprepareClaim(claimUID string) error
 }
 
 // ConfigHandler handles opaque configuration set for requests in ResourceClaims.

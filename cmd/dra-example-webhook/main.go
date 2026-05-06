@@ -36,6 +36,8 @@ import (
 
 	"sigs.k8s.io/dra-example-driver/internal/profiles"
 	"sigs.k8s.io/dra-example-driver/internal/profiles/gpu"
+	"sigs.k8s.io/dra-example-driver/internal/profiles/mdev"
+	"sigs.k8s.io/dra-example-driver/internal/profiles/vfio"
 	"sigs.k8s.io/dra-example-driver/pkg/flags"
 )
 
@@ -51,8 +53,15 @@ type Flags struct {
 
 type validator func(runtime.Object) error
 
+// validProfiles maps a deviceProfile name to a ConfigHandler usable by the
+// webhook for validating opaque ResourceClaim parameters. The webhook does
+// not need device enumeration or claim-scoped side effects, so the
+// zero-value Profile (which still has a working SchemeBuilder/Validate) is
+// sufficient here.
 var validProfiles = map[string]profiles.ConfigHandler{
-	gpu.ProfileName: gpu.Profile{},
+	gpu.ProfileName:  gpu.Profile{},
+	vfio.ProfileName: vfio.Profile{},
+	mdev.ProfileName: mdev.Profile{},
 }
 
 func main() {

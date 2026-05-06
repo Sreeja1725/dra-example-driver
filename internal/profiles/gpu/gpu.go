@@ -36,6 +36,7 @@ import (
 const ProfileName = "gpu"
 
 type Profile struct {
+	profiles.NoopPrepareClaim
 	nodeName string
 	numGPUs  int
 }

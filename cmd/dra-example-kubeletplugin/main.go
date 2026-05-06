@@ -33,6 +33,8 @@ import (
 
 	"sigs.k8s.io/dra-example-driver/internal/profiles"
 	"sigs.k8s.io/dra-example-driver/internal/profiles/gpu"
+	"sigs.k8s.io/dra-example-driver/internal/profiles/mdev"
+	"sigs.k8s.io/dra-example-driver/internal/profiles/vfio"
 	"sigs.k8s.io/dra-example-driver/pkg/flags"
 )
 
@@ -66,6 +68,12 @@ type Config struct {
 var validProfiles = map[string]func(flags Flags) profiles.Profile{
 	gpu.ProfileName: func(flags Flags) profiles.Profile {
 		return gpu.NewProfile(flags.nodeName, flags.numDevices)
+	},
+	vfio.ProfileName: func(flags Flags) profiles.Profile {
+		return vfio.NewProfile(flags.nodeName, flags.driverName, flags.cdiRoot, flags.numDevices)
+	},
+	mdev.ProfileName: func(flags Flags) profiles.Profile {
+		return mdev.NewProfile(flags.nodeName, flags.driverName, flags.cdiRoot, flags.numDevices)
 	},
 }
 
@@ -109,7 +117,7 @@ func newApp() *cli.App {
 		},
 		&cli.IntFlag{
 			Name:        "num-devices",
-			Usage:       "The number of devices to be generated. Only relevant for the " + gpu.ProfileName + " profile.",
+			Usage:       "The number of mock devices to be advertised on this node. Honored by the gpu, vfio, and mdev profiles.",
 			Value:       8,
 			Destination: &flags.numDevices,
 			EnvVars:     []string{"NUM_DEVICES"},
