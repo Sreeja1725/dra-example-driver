@@ -1,0 +1,63 @@
+# pci-test1: single VMI consumes one mock vfio-pci device via a direct
+# ResourceClaim (the simplest end-to-end shape). Requires:
+#   * dra-example-driver installed with deviceProfile=vfio
+#     (driverName defaults to vfio.example.com)
+#   * KubeVirt installed on the cluster with the GPUsWithDRA and/or
+#     HostDevicesWithDRA feature gates enabled
+#
+# What this exercises:
+#   * scheduling: the VMI's launcher pod gets the claim allocated
+#   * metadata: the kubeletplugin writes
+#       /var/run/kubernetes.io/dra-device-attributes/resourceclaims/
+#         pci-test1-claim/vfio-dev/vfio.example.com-metadata.json
+#     which virt-launcher reads via kubevirt/pkg/dra
+#   * VMI spec: hostDevices entry with claimRequest references the claim
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pci-test1
+
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  namespace: pci-test1
+  name: pci-test1-claim
+spec:
+  devices:
+    requests:
+    - name: vfio-dev
+      exactly:
+        deviceClassName: vfio.example.com
+
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  namespace: pci-test1
+  name: vmi-vfio-single
+spec:
+  domain:
+    cpu:
+      cores: 1
+    memory:
+      guest: 256Mi
+    devices:
+      disks:
+      - name: containerdisk
+        disk:
+          bus: virtio
+      hostDevices:
+      - name: hostdev-vfio
+        claimRequest:
+          claimName: pci-test1-claim
+          requestName: vfio-dev
+  resourceClaims:
+  - name: pci-test1-claim
+    resourceClaimName: pci-test1-claim
+  volumes:
+  - name: containerdisk
+    containerDisk:
+      image: quay.io/kubevirt/cirros-container-disk-demo:latest

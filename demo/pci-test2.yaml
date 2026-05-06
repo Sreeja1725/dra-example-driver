@@ -1,0 +1,60 @@
+# pci-test2: VMI consumes two mock vfio-pci devices via two separate
+# requests in a single ResourceClaim. Verifies that the kubeletplugin
+# writes one metadata file per request and that virt-launcher correctly
+# resolves both into hostDevices.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pci-test2
+
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  namespace: pci-test2
+  name: pci-test2-claim
+spec:
+  devices:
+    requests:
+    - name: nic-a
+      exactly:
+        deviceClassName: vfio.example.com
+    - name: nic-b
+      exactly:
+        deviceClassName: vfio.example.com
+
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  namespace: pci-test2
+  name: vmi-vfio-pair
+spec:
+  domain:
+    cpu:
+      cores: 1
+    memory:
+      guest: 256Mi
+    devices:
+      disks:
+      - name: containerdisk
+        disk:
+          bus: virtio
+      hostDevices:
+      - name: hostdev-a
+        claimRequest:
+          claimName: pci-test2-claim
+          requestName: nic-a
+      - name: hostdev-b
+        claimRequest:
+          claimName: pci-test2-claim
+          requestName: nic-b
+  resourceClaims:
+  - name: pci-test2-claim
+    resourceClaimName: pci-test2-claim
+  volumes:
+  - name: containerdisk
+    containerDisk:
+      image: quay.io/kubevirt/cirros-container-disk-demo:latest

@@ -1,0 +1,59 @@
+# pci-test3: VMI consumes one mock mediated device (vGPU-style) via the
+# mdev profile. Requires the dra-example-driver to be installed twice (once
+# per profile) or with deviceProfile=mdev. The driverName for this
+# instance is mdev.example.com; the device advertises an `mdevUUID`
+# attribute that virt-launcher uses to assemble a libvirt
+# <hostdev type='mdev'> element.
+#
+# This fixture exercises the same end-to-end metadata path as pci-test1,
+# but proves the mediated-device branch of pkg/dra/utils.go (the path that
+# returns a `vfio-pci` Type:HostDeviceMDev rather than a PCI passthrough).
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pci-test3
+
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  namespace: pci-test3
+  name: pci-test3-claim
+spec:
+  devices:
+    requests:
+    - name: mdev-dev
+      exactly:
+        deviceClassName: mdev.example.com
+
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  namespace: pci-test3
+  name: vmi-mdev-single
+spec:
+  domain:
+    cpu:
+      cores: 1
+    memory:
+      guest: 256Mi
+    devices:
+      disks:
+      - name: containerdisk
+        disk:
+          bus: virtio
+      hostDevices:
+      - name: hostdev-mdev
+        claimRequest:
+          claimName: pci-test3-claim
+          requestName: mdev-dev
+  resourceClaims:
+  - name: pci-test3-claim
+    resourceClaimName: pci-test3-claim
+  volumes:
+  - name: containerdisk
+    containerDisk:
+      image: quay.io/kubevirt/cirros-container-disk-demo:latest
