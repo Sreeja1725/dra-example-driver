@@ -1,0 +1,113 @@
+# VMI test with real vfio-pci devices.
+#
+# The driver discovers devices by walking /sys/bus/pci/drivers/vfio-pci/,
+# so every advertised device is by construction already bound to
+# vfio-pci and usable for passthrough. Vendor/device/class are read
+# from /sys/bus/pci/devices/<BDF>/ - the canonical per-device entry.
+# No CEL selector is needed: the kernel has already gated the bus
+# down to the assignable subset.
+#
+# Binding a device to vfio-pci is the operator's responsibility,
+# e.g. via the `vfio-pci.ids` kernel cmdline,
+# `driverctl set-override <BDF> vfio-pci`, or a custom systemd unit.
+# Hosts that haven't bound anything yet will advertise an empty pool.
+#
+# Prerequisites
+# -------------
+#   1. Verify at least one device is bound to vfio-pci on the host:
+#        ls /sys/bus/pci/drivers/vfio-pci
+#      (you should see at least one BDF entry like "0000:65:00.0").
+#
+#   2. Install the driver with the vfio-gpu profile:
+#        helm upgrade -i dra-example-driver \
+#          ./deployments/helm/dra-example-driver \
+#          --set deviceProfile=vfio-gpu
+#
+#   3. (Optional) Configure KubeVirt to recognise the resource as
+#      externally provided. Pure DRA does NOT require this entry, but
+#      the legacy `deviceName: vfio-gpu.example.com/gpu` form does:
+#
+#      kubectl patch kubevirt kubevirt -n kubevirt --type=merge -p '{
+#        "spec": {
+#          "configuration": {
+#            "developerConfiguration": {
+#              "featureGates": ["GPUsWithDRA", "HostDevicesWithDRA"],
+#              "useEmulation": true
+#            },
+#            "permittedHostDevices": {
+#              "pciHostDevices": [{
+#                "pciVendorSelector": "10de:",
+#                "resourceName": "vfio-gpu.example.com/gpu",
+#                "externalResourceProvider": true
+#              }]
+#            }
+#          }
+#        }
+#      }'
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vfio-vm-test
+
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  namespace: vfio-vm-test
+  name: vfio-device
+spec:
+  spec:
+    devices:
+      requests:
+      - name: gpu
+        exactly:
+          deviceClassName: vfio-gpu.example.com
+
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  namespace: vfio-vm-test
+  name: vfio-test-vm
+  labels:
+    app: vfio-test
+spec:
+  domain:
+    resources:
+      requests:
+        memory: 128Mi
+    cpu:
+      cores: 1
+    devices:
+      autoattachGraphicsDevice: false
+      disks:
+      - name: containerdisk
+        disk:
+          bus: virtio
+      interfaces:
+      - name: default
+        masquerade: {}
+      hostDevices:
+      # Pure DRA reference: KubeVirt reads the KEP-5304 metadata file the
+      # driver mounts into virt-launcher and constructs the VFIO PCI
+      # passthrough directly from the allocated device's attributes. No
+      # device plugin or extended-resource request is added to the
+      # launcher Pod, so it can be scheduled purely on the DRA allocation.
+      - name: gpu0
+        claimName: gpu
+        requestName: gpu
+    # NOTE: leave `spec.domain.machine` unset so KubeVirt picks the
+    # arch-appropriate default (`q35` on x86_64, `virt` on aarch64).
+    # Hardcoding `virt` breaks scheduling on x86_64 clusters.
+  networks:
+  - name: default
+    pod: {}
+  volumes:
+  - name: containerdisk
+    containerDisk:
+      image: quay.io/kubevirt/cirros-container-disk-demo:latest
+  resourceClaims:
+  - name: gpu
+    resourceClaimTemplateName: vfio-device

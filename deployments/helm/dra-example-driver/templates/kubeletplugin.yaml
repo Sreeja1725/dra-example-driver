@@ -80,6 +80,12 @@ spec:
         # Simulated number of devices the example driver will pretend to have.
         - name: NUM_DEVICES
           value: {{ .Values.kubeletPlugin.numDevices | quote }}
+        {{- if eq .Values.deviceProfile "vfio-gpu" }}
+        - name: PCI_SYSFS_ROOT
+          value: {{ default "/sys/bus/pci/drivers/vfio-pci" (dig "pci" "sysfsRoot" "/sys/bus/pci/drivers/vfio-pci" .Values.kubeletPlugin) | quote }}
+        - name: PCI_DEVICES_ROOT
+          value: {{ default "/sys/bus/pci/devices" (dig "pci" "devicesRoot" "/sys/bus/pci/devices" .Values.kubeletPlugin) | quote }}
+        {{- end }}
         {{- if .Values.kubeletPlugin.containers.plugin.healthcheckPort }}
         - name: HEALTHCHECK_PORT
           value: {{ .Values.kubeletPlugin.containers.plugin.healthcheckPort | quote }}
@@ -88,6 +94,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
+        {{- if .Values.kubeletPlugin.enableDeviceMetadata }}
+        - name: ENABLE_DEVICE_METADATA
+          value: {{ .Values.kubeletPlugin.enableDeviceMetadata | quote }}
+        {{- end }}
         volumeMounts:
         - name: plugins-registry
           mountPath: {{ .Values.kubeletPlugin.kubeletRegistrarDirectoryPath | quote }}
@@ -95,6 +105,16 @@ spec:
           mountPath: {{ .Values.kubeletPlugin.kubeletPluginsDirectoryPath | quote }}
         - name: cdi
           mountPath: /var/run/cdi
+        {{- if eq .Values.deviceProfile "vfio-gpu" }}
+        - name: host-pci-bus
+          mountPath: /sys/bus/pci
+          readOnly: true
+        - name: host-pci-devices
+          mountPath: /sys/devices
+          readOnly: true
+        - name: dev-vfio
+          mountPath: /dev/vfio
+        {{- end }}
       volumes:
       - name: plugins-registry
         hostPath:
@@ -105,6 +125,17 @@ spec:
       - name: cdi
         hostPath:
           path: /var/run/cdi
+      {{- if eq .Values.deviceProfile "vfio-gpu" }}
+      - name: host-pci-bus
+        hostPath:
+          path: /sys/bus/pci
+      - name: host-pci-devices
+        hostPath:
+          path: /sys/devices
+      - name: dev-vfio
+        hostPath:
+          path: /dev/vfio
+      {{- end }}
       {{- with .Values.kubeletPlugin.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

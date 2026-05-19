@@ -33,6 +33,7 @@ import (
 
 	"sigs.k8s.io/dra-example-driver/internal/profiles"
 	"sigs.k8s.io/dra-example-driver/internal/profiles/gpu"
+	vfiogpu "sigs.k8s.io/dra-example-driver/internal/profiles/vfio-gpu"
 	"sigs.k8s.io/dra-example-driver/pkg/flags"
 )
 
@@ -53,6 +54,9 @@ type Flags struct {
 	profile                       string
 	driverName                    string
 	podUID                        string
+	pciSysfsRoot                  string
+	pciDevicesRoot                string
+	enableDeviceMetadata          bool
 }
 
 type Config struct {
@@ -63,9 +67,17 @@ type Config struct {
 	profile profiles.Profile
 }
 
-var validProfiles = map[string]func(flags Flags) profiles.Profile{
-	gpu.ProfileName: func(flags Flags) profiles.Profile {
-		return gpu.NewProfile(flags.nodeName, flags.numDevices)
+var validProfiles = map[string]func(flags Flags) (profiles.Profile, error){
+	gpu.ProfileName: func(flags Flags) (profiles.Profile, error) {
+		return gpu.NewProfile(flags.nodeName, flags.numDevices), nil
+	},
+	vfiogpu.ProfileName: func(flags Flags) (profiles.Profile, error) {
+		return vfiogpu.NewProfile(
+			flags.nodeName,
+			flags.driverName,
+			flags.pciSysfsRoot,
+			flags.pciDevicesRoot,
+		), nil
 	},
 }
 
@@ -154,6 +166,25 @@ func newApp() *cli.App {
 			Destination: &flags.podUID,
 			EnvVars:     []string{"POD_UID"},
 		},
+		&cli.StringFlag{
+			Name:        "pci-sysfs-root",
+			Usage:       "Directory the vfio-gpu profile walks to discover devices already bound to vfio-gpu. Empty defaults to /sys/bus/pci/drivers/vfio-gpu.",
+			Destination: &flags.pciSysfsRoot,
+			EnvVars:     []string{"PCI_SYSFS_ROOT"},
+		},
+		&cli.StringFlag{
+			Name:        "pci-devices-root",
+			Usage:       "Canonical PCI device directory the vfio-gpu profile reads vendor/device/class from for each discovered BDF. Empty defaults to /sys/bus/pci/devices.",
+			Destination: &flags.pciDevicesRoot,
+			EnvVars:     []string{"PCI_DEVICES_ROOT"},
+		},
+		&cli.BoolFlag{
+			Name:        "enable-device-metadata",
+			Usage:       "Enable DRA in-container device metadata files for prepared devices.",
+			Value:       false,
+			Destination: &flags.enableDeviceMetadata,
+			EnvVars:     []string{"ENABLE_DEVICE_METADATA"},
+		},
 	}
 	cliFlags = append(cliFlags, flags.kubeClientConfig.Flags()...)
 	cliFlags = append(cliFlags, flags.loggingConfig.Flags()...)
@@ -186,10 +217,15 @@ func newApp() *cli.App {
 				return fmt.Errorf("invalid device profile %q, valid profiles are %q", flags.profile, validProfileNames)
 			}
 
+			profile, err := newProfile(*flags)
+			if err != nil {
+				return fmt.Errorf("construct %q profile: %w", flags.profile, err)
+			}
+
 			config := &Config{
 				flags:      flags,
 				coreclient: clientSets.Core,
-				profile:    newProfile(*flags),
+				profile:    profile,
 			}
 
 			return RunPlugin(ctx, config)

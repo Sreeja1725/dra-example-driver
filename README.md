@@ -440,6 +440,51 @@ intended to be a recommendation for all DRA drivers. Other drivers will likely
 be simpler by implementing their logic more directly than through an
 abstraction like the example driver's profiles.
 
+### Available profiles
+
+The default profile is `gpu`, which is what the quickstart above installs; all
+existing `demo/gpu-test*.yaml` fixtures continue to work unchanged. An
+additional profile exists for KubeVirt e2e testing (VEP-10):
+
+| Profile    | Driver name             | Devices advertise                                                       | Discovery                                          | Demo fixtures              |
+|------------|-------------------------|-------------------------------------------------------------------------|----------------------------------------------------|----------------------------|
+| `gpu`      | `gpu.example.com`       | model/index/uuid                                                        | Mock (count via `--num-devices`)                   | `demo/gpu-test{1..5}.yaml` |
+| `vfio-gpu` | `vfio-gpu.example.com`  | `resource.kubernetes.io/pciBusID`, vendor/device/class, IOMMU group| Real, scans `/sys/bus/pci/drivers/vfio-pci` (vendor/device/class read from `/sys/bus/pci/devices/<BDF>`) | `demo/vfio-vm-test.yaml`   |
+
+The `vfio-gpu` profile relies on the upstream kubeletplugin framework's
+[KEP-5304][kep-5304] support to write a device metadata file at
+`/var/run/kubernetes.io/dra-device-attributes/<claim>/<request>/metadata.json`
+inside any consuming pod (enabled via the `kubeletPlugin.enableDeviceMetadata`
+Helm value / `--enable-device-metadata` CLI flag). KubeVirt's `virt-launcher`
+reads that file to assemble the `<hostdev>` element when a
+`VirtualMachineInstance` references the claim. The profile discovers
+devices by walking `/sys/bus/pci/drivers/vfio-pci/`, so every advertised
+device is by construction already bound to `vfio-pci` and gets
+`/dev/vfio/<group>` + `/dev/vfio/vfio` injected into the consumer pod's
+CDI spec at `NodePrepareResources` time. No vendor/device filter or CEL
+selector is needed: the kernel has already partitioned the bus for us.
+
+Binding devices to `vfio-pci` is the operator's job (kernel cmdline
+`vfio-pci.ids=`, `driverctl set-override <BDF> vfio-pci`, a custom systemd
+unit, ...). Hosts that haven't bound anything yet will advertise an empty
+pool rather than fail the driver startup.
+
+### Installing a non-default profile
+
+```bash
+# vfio-gpu profile (real PCI passthrough for KubeVirt VMIs)
+helm upgrade -i \
+  --create-namespace \
+  --namespace dra-example-driver \
+  --set deviceProfile=vfio-gpu \
+  dra-example-driver-vfio-gpu \
+  -- ena
+  deployments/helm/dra-example-driver
+```
+
+Each profile is a separate driver in the cluster, so both can be
+installed side-by-side without conflict.
+
 ## Anatomy of a DRA resource driver
 
 TBD
