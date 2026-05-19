@@ -168,7 +168,7 @@ func newApp() *cli.App {
 		},
 		&cli.StringFlag{
 			Name:        "pci-sysfs-root",
-			Usage:       "Directory the vfio-gpu profile walks to discover devices already bound to vfio-gpu. Empty defaults to /sys/bus/pci/drivers/vfio-gpu.",
+			Usage:       "Directory the vfio-gpu profile walks to discover devices already bound to the kernel vfio-pci driver. Empty defaults to /sys/bus/pci/drivers/vfio-pci.",
 			Destination: &flags.pciSysfsRoot,
 			EnvVars:     []string{"PCI_SYSFS_ROOT"},
 		},

@@ -21,13 +21,15 @@ allowDefaultNamespace: false
 #   - "vfio-gpu": Real PCI devices already bound to the vfio-pci
 #                 kernel driver, discovered by walking
 #                 /sys/bus/pci/drivers/vfio-pci. Each such device is
-#                 advertised as a DRA device with attributes for
-#                 the PCI bus ID, vendor/device/class, IOMMU group
-#                 and NUMA node - vendor/device/class are sourced
-#                 from /sys/bus/pci/devices/<BDF>/. /dev/vfio/<group>
-#                 + /dev/vfio/vfio are automatically injected into
-#                 the consumer pod's CDI spec so KubeVirt's
-#                 virt-launcher can drive QEMU with
+#                 advertised as a DRA device with attributes for the
+#                 PCI bus ID, vendor/device/class and IOMMU group
+#                 (vendor/device/class are sourced from
+#                 /sys/bus/pci/devices/<BDF>/). When
+#                 `kubeletPlugin.enableDeviceMetadata=true` the
+#                 upstream kubeletplugin framework writes a KEP-5304
+#                 device metadata file into the consumer pod from
+#                 those attributes, which KubeVirt's virt-launcher
+#                 reads to drive QEMU with
 #                 `-device vfio-pci,host=<BDF>`. Use with
 #                 demo/vfio-vm-test.yaml.
 #

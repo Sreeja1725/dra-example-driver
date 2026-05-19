@@ -184,7 +184,7 @@ func readPCIDevice(driverDevicePath, busDevicePath, address string) (SysfsDevice
 }
 
 // readHexFile reads a sysfs file whose contents are a 0x-prefixed
-// hexadecimal integer (e.g. "0x10de\n") and returns the lowercase hex
+// hexadecimal integer (e.g. "0xe1a5\n") and returns the lowercase hex
 // digits without the prefix. Whitespace is trimmed.
 func readHexFile(path string) (string, error) {
 	raw, err := os.ReadFile(path)
@@ -213,21 +213,6 @@ func readPCIIommuGroup(devicePath string) (int64, error) {
 		return 0, fmt.Errorf("parse iommu group %q: %w", base, err)
 	}
 	return g, nil
-}
-
-// readNumaNode reads <devicePath>/numa_node. Missing or unparseable
-// values are reported as -1 (matching what the kernel writes for
-// devices without an explicit NUMA association).
-func readNumaNode(path string) int64 {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return -1
-	}
-	v, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
-	if err != nil {
-		return -1
-	}
-	return v
 }
 
 // readSymlinkBasename resolves a symlink and returns the basename of

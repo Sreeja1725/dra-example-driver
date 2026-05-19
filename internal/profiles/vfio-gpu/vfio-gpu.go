@@ -23,6 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/utils/ptr"
+	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
+	cdispec "tags.cncf.io/container-device-interface/specs-go"
 
 	configapi "sigs.k8s.io/dra-example-driver/api/example.com/resource/vfio-gpu/v1alpha1"
 	"sigs.k8s.io/dra-example-driver/internal/profiles"
@@ -72,13 +74,6 @@ const (
 // kernel-supplied list of devices already bound to vfio-pci) and
 // surfaces their attributes (PCI bus ID, vendor/device/class, IOMMU
 // group) in the published ResourceSlice.
-//
-// KEP-5304 device-metadata files (the per-claim JSON KubeVirt's
-// virt-launcher reads to learn the allocated BDF) are written by
-// the upstream kubeletplugin framework, not by this profile. The
-// driver enables that path with kubeletplugin.EnableDeviceMetadata
-// and populates kubeletplugin.Device.Metadata.Attributes from the
-// allocatable pool in cmd/dra-example-kubeletplugin/driver.go.
 type Profile struct {
 	nodeName       string
 	driverName     string
@@ -100,6 +95,30 @@ func NewProfile(nodeName, driverName, sysfsRoot, pciDevicesRoot string) Profile 
 		sysfsRoot:      sysfsRoot,
 		pciDevicesRoot: pciDevicesRoot,
 	}
+}
+
+// deviceName returns the DRA device name assigned to the i-th sysfs
+// scan result. EnumerateDevices and ApplyConfig must agree on this
+// convention so that ApplyConfig can map a kubelet-supplied result.Device
+// back to a SysfsDevice.
+func deviceName(index int) string {
+	return fmt.Sprintf("pci-%d", index)
+}
+
+// scanByName runs ScanSysfs against the profile's configured roots and
+// returns the results keyed by the DRA device name that EnumerateDevices
+// assigned. Used by ApplyConfig to recover per-device sysfs facts
+// (notably IOMMU group) from a kubelet-supplied result.Device string.
+func (p Profile) scanByName() (map[string]SysfsDevice, error) {
+	scanned, err := ScanSysfs(p.sysfsRoot, p.pciDevicesRoot)
+	if err != nil {
+		return nil, fmt.Errorf("scan vfio-pci sysfs at %q: %w", p.sysfsRoot, err)
+	}
+	out := make(map[string]SysfsDevice, len(scanned))
+	for i, s := range scanned {
+		out[deviceName(i)] = s
+	}
+	return out, nil
 }
 
 // EnumerateDevices implements [profiles.Profile]. It scans the
@@ -158,7 +177,7 @@ func (p Profile) Validate(config runtime.Object) error {
 	return cfg.Validate()
 }
 
-func (p Profile) ApplyConfig(config runtime.Object, _ []*resourceapi.DeviceRequestAllocationResult) (profiles.PerDeviceCDIContainerEdits, error) {
+func (p Profile) ApplyConfig(config runtime.Object, results []*resourceapi.DeviceRequestAllocationResult) (profiles.PerDeviceCDIContainerEdits, error) {
 	if config == nil {
 		config = configapi.DefaultVfioConfig()
 	}
@@ -172,6 +191,34 @@ func (p Profile) ApplyConfig(config runtime.Object, _ []*resourceapi.DeviceReque
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("error validating vfio config: %w", err)
 	}
-	return nil, nil
-}
 
+	if len(results) == 0 {
+		return nil, nil
+	}
+
+	devices, err := p.scanByName()
+	if err != nil {
+		return nil, err
+	}
+
+	perDeviceEdits := make(profiles.PerDeviceCDIContainerEdits, len(results))
+	for _, result := range results {
+		dev, ok := devices[result.Device]
+		if !ok {
+			return nil, fmt.Errorf("vfio-gpu sysfs scan no longer sees allocated device %q (currently visible: %d); was it unbound from vfio-pci?", result.Device, len(devices))
+		}
+		if dev.IommuGroup < 0 {
+			return nil, fmt.Errorf("vfio-gpu device %q (BDF %s) has no IOMMU group; the kernel must be booted with intel_iommu=on / amd_iommu=on for vfio-pci passthrough", result.Device, dev.PCIAddress)
+		}
+
+		edits := &cdispec.ContainerEdits{
+			DeviceNodes: []*cdispec.DeviceNode{
+				{Path: fmt.Sprintf("/dev/vfio/%d", dev.IommuGroup), Permissions: "rwm"},
+				{Path: "/dev/vfio/vfio", Permissions: "rwm"},
+			},
+		}
+		perDeviceEdits[result.Device] = &cdiapi.ContainerEdits{ContainerEdits: edits}
+	}
+
+	return perDeviceEdits, nil
+}

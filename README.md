@@ -456,13 +456,19 @@ The `vfio-gpu` profile relies on the upstream kubeletplugin framework's
 `/var/run/kubernetes.io/dra-device-attributes/<claim>/<request>/metadata.json`
 inside any consuming pod (enabled via the `kubeletPlugin.enableDeviceMetadata`
 Helm value / `--enable-device-metadata` CLI flag). KubeVirt's `virt-launcher`
-reads that file to assemble the `<hostdev>` element when a
-`VirtualMachineInstance` references the claim. The profile discovers
-devices by walking `/sys/bus/pci/drivers/vfio-pci/`, so every advertised
-device is by construction already bound to `vfio-pci` and gets
-`/dev/vfio/<group>` + `/dev/vfio/vfio` injected into the consumer pod's
-CDI spec at `NodePrepareResources` time. No vendor/device filter or CEL
-selector is needed: the kernel has already partitioned the bus for us.
+reads that file to learn the allocated BDF.
+
+The profile additionally injects, via the per-claim CDI spec built at
+`NodePrepareResources` time, the VFIO character devices the launcher
+needs to actually open the device: `/dev/vfio/<iommu_group>` for the
+allocated BDF and the userspace `/dev/vfio/vfio` entry point. Together
+with the BDF carried in the metadata file, this is what lets
+`virt-launcher` start QEMU with `-device vfio-pci,host=<BDF>`.
+
+The profile discovers devices by walking `/sys/bus/pci/drivers/vfio-pci/`,
+so every advertised device is by construction already bound to `vfio-pci`.
+No vendor/device filter or CEL selector is needed: the kernel has already
+partitioned the bus for us.
 
 Binding devices to `vfio-pci` is the operator's job (kernel cmdline
 `vfio-pci.ids=`, `driverctl set-override <BDF> vfio-pci`, a custom systemd
@@ -477,8 +483,8 @@ helm upgrade -i \
   --create-namespace \
   --namespace dra-example-driver \
   --set deviceProfile=vfio-gpu \
+  --set kubeletPlugin.enableDeviceMetadata=true \
   dra-example-driver-vfio-gpu \
-  -- ena
   deployments/helm/dra-example-driver
 ```
 
