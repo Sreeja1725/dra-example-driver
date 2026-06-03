@@ -54,8 +54,6 @@ type Flags struct {
 	profile                       string
 	driverName                    string
 	podUID                        string
-	pciSysfsRoot                  string
-	pciDevicesRoot                string
 	enableDeviceMetadata          bool
 }
 
@@ -72,12 +70,7 @@ var validProfiles = map[string]func(flags Flags) (profiles.Profile, error){
 		return gpu.NewProfile(flags.nodeName, flags.numDevices), nil
 	},
 	vfiogpu.ProfileName: func(flags Flags) (profiles.Profile, error) {
-		return vfiogpu.NewProfile(
-			flags.nodeName,
-			flags.driverName,
-			flags.pciSysfsRoot,
-			flags.pciDevicesRoot,
-		), nil
+		return vfiogpu.NewProfile(flags.nodeName, flags.driverName), nil
 	},
 }
 
@@ -165,18 +158,6 @@ func newApp() *cli.App {
 			Usage:       "UID of the pod (used for seamless upgrades to create unique socket names).",
 			Destination: &flags.podUID,
 			EnvVars:     []string{"POD_UID"},
-		},
-		&cli.StringFlag{
-			Name:        "pci-sysfs-root",
-			Usage:       "Directory the vfio-gpu profile walks to discover devices already bound to the kernel vfio-pci driver. Empty defaults to /sys/bus/pci/drivers/vfio-pci.",
-			Destination: &flags.pciSysfsRoot,
-			EnvVars:     []string{"PCI_SYSFS_ROOT"},
-		},
-		&cli.StringFlag{
-			Name:        "pci-devices-root",
-			Usage:       "Canonical PCI device directory the vfio-gpu profile reads vendor/device/class from for each discovered BDF. Empty defaults to /sys/bus/pci/devices.",
-			Destination: &flags.pciDevicesRoot,
-			EnvVars:     []string{"PCI_DEVICES_ROOT"},
 		},
 		&cli.BoolFlag{
 			Name:        "enable-device-metadata",

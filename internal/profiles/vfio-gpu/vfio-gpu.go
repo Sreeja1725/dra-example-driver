@@ -21,6 +21,7 @@ import (
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/dynamic-resource-allocation/deviceattribute"
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/utils/ptr"
 	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
@@ -30,89 +31,45 @@ import (
 	"sigs.k8s.io/dra-example-driver/internal/profiles"
 )
 
-// ProfileName identifies the vfio-gpu profile to the driver and helm
-// chart. The helm chart's `deviceProfile` value must use this exact
-// string; the auto-derived driver name is "vfio-gpu.example.com".
 const ProfileName = "vfio-gpu"
 
-// Well-known DRA device attribute keys consumed by KubeVirt's
-// pkg/dra/metadata package. Mirrored here so the driver does not need
-// a build-time dependency on the KubeVirt module.
-//
-// Only [PCIBusIDAttribute] is part of KubeVirt's contract: virt-launcher
-// reads it from the per-claim KEP-5304 metadata file (written by the
-// upstream kubeletplugin framework when the driver is started with
-// EnableDeviceMetadata) and uses it to build
-// `-device vfio-pci,host=<BDF>` for QEMU. Every other attribute below
-// is informational - it ships into the metadata file for
-// observability/debugging and lets advanced consumers (selectors,
-// CEL expressions, custom controllers) match on vendor/device/class/
-// topology, but no downstream consumer is required to look at them.
 const (
-	// PCIBusIDAttribute is the standard attribute carrying the host
-	// PCI address of a passthrough device.
-	PCIBusIDAttribute resourceapi.QualifiedName = "resource.kubernetes.io/pciBusID"
-
-	// VendorIDAttribute is the PCI vendor ID of the device.
 	VendorIDAttribute resourceapi.QualifiedName = "VendorID"
 
-	// DeviceIDAttribute is the PCI device ID of the device.
 	DeviceIDAttribute resourceapi.QualifiedName = "DeviceID"
 
-	// ClassAttribute is the PCI class code of the device.
 	ClassAttribute resourceapi.QualifiedName = "Class"
 
-	// IommuGroupAttribute is the IOMMU group number for the device.
-	//
-	// Optional / informational from KubeVirt's point of view -
-	// virt-launcher derives nothing from it.
 	IommuGroupAttribute resourceapi.QualifiedName = "iommuGroup"
 )
 
 // Profile is the vfio-gpu device profile. It advertises one DRA
-// device per PCI BDF symlink found under [Profile.sysfsRoot] (the
+// device per PCI BDF symlink found under [DefaultSysfsRoot] (the
 // kernel-supplied list of devices already bound to vfio-pci) and
 // surfaces their attributes (PCI bus ID, vendor/device/class, IOMMU
 // group) in the published ResourceSlice.
 type Profile struct {
-	nodeName       string
-	driverName     string
-	sysfsRoot      string
-	pciDevicesRoot string
+	nodeName   string
+	driverName string
 }
 
-// NewProfile constructs a vfio-gpu Profile.
-func NewProfile(nodeName, driverName, sysfsRoot, pciDevicesRoot string) Profile {
-	if sysfsRoot == "" {
-		sysfsRoot = DefaultSysfsRoot
-	}
-	if pciDevicesRoot == "" {
-		pciDevicesRoot = DefaultPCIDevicesRoot
-	}
+func NewProfile(nodeName, driverName string) Profile {
 	return Profile{
-		nodeName:       nodeName,
-		driverName:     driverName,
-		sysfsRoot:      sysfsRoot,
-		pciDevicesRoot: pciDevicesRoot,
+		nodeName:   nodeName,
+		driverName: driverName,
 	}
 }
 
-// deviceName returns the DRA device name assigned to the i-th sysfs
-// scan result. EnumerateDevices and ApplyConfig must agree on this
-// convention so that ApplyConfig can map a kubelet-supplied result.Device
-// back to a SysfsDevice.
 func deviceName(index int) string {
 	return fmt.Sprintf("pci-%d", index)
 }
 
-// scanByName runs ScanSysfs against the profile's configured roots and
-// returns the results keyed by the DRA device name that EnumerateDevices
-// assigned. Used by ApplyConfig to recover per-device sysfs facts
-// (notably IOMMU group) from a kubelet-supplied result.Device string.
+// scanByName runs ScanSysfs and returns the results keyed by the DRA
+// device name that EnumerateDevices assigned.
 func (p Profile) scanByName() (map[string]SysfsDevice, error) {
-	scanned, err := ScanSysfs(p.sysfsRoot, p.pciDevicesRoot)
+	scanned, err := ScanSysfs(DefaultSysfsRoot)
 	if err != nil {
-		return nil, fmt.Errorf("scan vfio-pci sysfs at %q: %w", p.sysfsRoot, err)
+		return nil, fmt.Errorf("scan vfio-pci sysfs at %q: %w", DefaultSysfsRoot, err)
 	}
 	out := make(map[string]SysfsDevice, len(scanned))
 	for i, s := range scanned {
@@ -124,19 +81,22 @@ func (p Profile) scanByName() (map[string]SysfsDevice, error) {
 // EnumerateDevices implements [profiles.Profile]. It scans the
 // configured vfio-gpu sysfs tree and returns one DRA device per BDF.
 func (p Profile) EnumerateDevices() (resourceslice.DriverResources, error) {
-	scanned, err := ScanSysfs(p.sysfsRoot, p.pciDevicesRoot)
+	scanned, err := ScanSysfs(DefaultSysfsRoot)
 	if err != nil {
-		return resourceslice.DriverResources{}, fmt.Errorf("scan vfio-pci sysfs at %q: %w", p.sysfsRoot, err)
+		return resourceslice.DriverResources{}, fmt.Errorf("scan vfio-pci sysfs at %q: %w", DefaultSysfsRoot, err)
 	}
 
 	devices := make([]resourceapi.Device, 0, len(scanned))
 	for i, s := range scanned {
 		attrs := map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
 			"index":           {IntValue: ptr.To(int64(i))},
-			PCIBusIDAttribute: {StringValue: ptr.To(s.PCIAddress)},
 			VendorIDAttribute: {StringValue: ptr.To(s.VendorID)},
 			DeviceIDAttribute: {StringValue: ptr.To(s.DeviceID)},
 			"driverVersion":   {VersionValue: ptr.To("1.0.0")},
+		}
+
+		if bdf, err := deviceattribute.GetPCIBusIDAttribute(s.PCIAddress); err == nil {
+			attrs[bdf.Name] = bdf.Value
 		}
 
 		if s.Class != "" {
@@ -151,7 +111,7 @@ func (p Profile) EnumerateDevices() (resourceslice.DriverResources, error) {
 		}
 
 		devices = append(devices, resourceapi.Device{
-			Name:       fmt.Sprintf("pci-%d", i),
+			Name:       deviceName(i),
 			Attributes: attrs,
 		})
 	}

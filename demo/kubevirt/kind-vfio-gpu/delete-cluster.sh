@@ -14,20 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tears down the kind-vfio-gpu cluster and unloads the host-side
-# fake-pci + fake-iommu kernel modules. Reverse of create-cluster.sh.
-
 CURRENT_DIR="$(cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)"
+_unused() { :; } # keep CURRENT_DIR for shellcheck symmetry with create-cluster.sh
+_unused "${CURRENT_DIR}"
 
 set -e
 set -o pipefail
 
-: "${KIND_CLUSTER_NAME:=vfio-gpu-cluster}"
-: "${KIND_CLUSTER_CONFIG_PATH:=${CURRENT_DIR}/kind-cluster-config.yaml}"
-: "${KEEP_MODULES:=false}"
-export KIND_CLUSTER_NAME KIND_CLUSTER_CONFIG_PATH
-
-source "${CURRENT_DIR}/../../scripts/common.sh"
+: "${KIND_CLUSTER_NAME:=kind-vfio-gpu}"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -35,32 +29,19 @@ NC='\033[0m'
 log_info() { printf "${GREEN}[INFO]${NC} %s\n" "$*"; }
 log_warn() { printf "${YELLOW}[WARN]${NC} %s\n" "$*"; }
 
-SETUP_SCRIPT="${CURRENT_DIR}/setup-fake-pci-host.sh"
-
-# 1. Delete the kind cluster. No-op if the cluster does not exist.
-if ${KIND} get clusters 2>/dev/null | grep -qx "${KIND_CLUSTER_NAME}"; then
+if kind get clusters 2>/dev/null | grep -qx "${KIND_CLUSTER_NAME}"; then
     log_info "Deleting kind cluster ${KIND_CLUSTER_NAME}"
-    ${KIND} delete cluster --name "${KIND_CLUSTER_NAME}"
+    kind delete cluster --name "${KIND_CLUSTER_NAME}"
 else
-    log_info "Kind cluster ${KIND_CLUSTER_NAME} not found; skipping kind delete."
+    log_warn "kind cluster ${KIND_CLUSTER_NAME} not found - skipping"
 fi
 
-# 1b. Clean any leftover kubeconfig context so the next 'kubectl' on the
-#     host doesn't try to talk to the now-dead random API server port.
 kubectl config delete-context "kind-${KIND_CLUSTER_NAME}" >/dev/null 2>&1 || true
 kubectl config delete-cluster "kind-${KIND_CLUSTER_NAME}" >/dev/null 2>&1 || true
 kubectl config delete-user    "kind-${KIND_CLUSTER_NAME}" >/dev/null 2>&1 || true
 
-# 2. Unload host-side kernel modules.
-if [[ "${KEEP_MODULES}" == "true" ]]; then
-    log_warn "KEEP_MODULES=true - leaving fake-iommu / fake-pci loaded on the host."
-else
-    if [[ "$(uname -s)" == "Linux" ]]; then
-        log_info "Unloading fake-pci + fake-iommu on the host"
-        sudo bash "${SETUP_SCRIPT}" cleanup
-    else
-        log_warn "Not on Linux ($(uname -s)); skipping kernel-module unload."
-    fi
-fi
-
 printf "${GREEN}Cluster teardown complete: ${KIND_CLUSTER_NAME}${NC}\n"
+printf "${YELLOW}NOTE:${NC} host vfio-pci bindings (and any fake-pci/fake-iommu modules)\n"
+printf "      are left untouched. Unload them with the kubevirt-side teardown\n"
+printf "      you used to set them up, e.g.:\n"
+printf "          sudo bash <path-to>/setup-fake-pci-host.sh cleanup\n"

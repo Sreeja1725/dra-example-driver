@@ -80,12 +80,6 @@ spec:
         # Simulated number of devices the example driver will pretend to have.
         - name: NUM_DEVICES
           value: {{ .Values.kubeletPlugin.numDevices | quote }}
-        {{- if eq .Values.deviceProfile "vfio-gpu" }}
-        - name: PCI_SYSFS_ROOT
-          value: {{ default "/sys/bus/pci/drivers/vfio-pci" (dig "pci" "sysfsRoot" "/sys/bus/pci/drivers/vfio-pci" .Values.kubeletPlugin) | quote }}
-        - name: PCI_DEVICES_ROOT
-          value: {{ default "/sys/bus/pci/devices" (dig "pci" "devicesRoot" "/sys/bus/pci/devices" .Values.kubeletPlugin) | quote }}
-        {{- end }}
         {{- if .Values.kubeletPlugin.containers.plugin.healthcheckPort }}
         - name: HEALTHCHECK_PORT
           value: {{ .Values.kubeletPlugin.containers.plugin.healthcheckPort | quote }}

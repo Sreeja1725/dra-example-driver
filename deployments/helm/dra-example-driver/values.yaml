@@ -65,16 +65,10 @@ serviceAccount:
 kubeletPlugin:
   # numDevices describes how many mock devices to advertise on each
   # node. Honored only by the "gpu" profile - the "vfio-gpu" profile
-  # always discovers real devices by walking the kernel-supplied
-  # sysfs tree (see `pci.sysfsRoot` below).
+  # discovers real devices from /sys/bus/pci/drivers/vfio-pci and
+  # /sys/bus/pci/devices (fixed paths in the driver).
   numDevices: 8
 
-  # pci configures the "vfio-gpu" device profile. It only takes effect
-  # when `deviceProfile=vfio-gpu`.
-  #
-  pci:
-    sysfsRoot: /sys/bus/pci/drivers/vfio-pci
-    devicesRoot: /sys/bus/pci/devices
   priorityClassName: "system-node-critical"
   updateStrategy:
     type: RollingUpdate
