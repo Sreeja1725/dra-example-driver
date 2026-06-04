@@ -42,7 +42,9 @@ nodes:
       kubeletExtraArgs:
         v: "1"
   extraMounts:
-  - containerPath: /var/log/audit
-    hostPath: /var/log/audit
-    readOnly: true
-    - rw
+  - hostPath: /sys/bus/pci
+    containerPath: /sys/bus/pci
+  - hostPath: /sys/kernel/iommu_groups
+    containerPath: /sys/kernel/iommu_groups
+  - hostPath: /dev/vfio
+    containerPath: /dev/vfio
