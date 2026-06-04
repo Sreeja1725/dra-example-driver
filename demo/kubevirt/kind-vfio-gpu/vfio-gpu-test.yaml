@@ -1,0 +1,58 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vfio-vm-test
+
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  namespace: vfio-vm-test
+  name: vfio-device
+spec:
+  spec:
+    devices:
+      requests:
+      - name: gpu
+        exactly:
+          deviceClassName: vfio-gpu.example.com
+
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  namespace: vfio-vm-test
+  name: vfio-test-vm
+  labels:
+    app: vfio-test
+spec:
+  domain:
+    resources:
+      requests:
+        memory: 128Mi
+    cpu:
+      cores: 1
+    devices:
+      autoattachGraphicsDevice: false
+      disks:
+      - name: containerdisk
+        disk:
+          bus: virtio
+      interfaces:
+      - name: default
+        masquerade: {}
+      hostDevices:
+      - name: gpu0
+        claimName: gpu
+        requestName: gpu
+  networks:
+  - name: default
+    pod: {}
+  volumes:
+  - name: containerdisk
+    containerDisk:
+      image: quay.io/kubevirt/cirros-container-disk-demo:latest
+  resourceClaims:
+  - name: gpu
+    resourceClaimTemplateName: vfio-device

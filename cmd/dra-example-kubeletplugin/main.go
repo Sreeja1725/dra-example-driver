@@ -33,6 +33,7 @@ import (
 
 	"sigs.k8s.io/dra-example-driver/internal/profiles"
 	"sigs.k8s.io/dra-example-driver/internal/profiles/gpu"
+	vfiogpu "sigs.k8s.io/dra-example-driver/internal/profiles/vfio-gpu"
 	"sigs.k8s.io/dra-example-driver/pkg/flags"
 )
 
@@ -69,6 +70,9 @@ type Config struct {
 var validProfiles = map[string]func(flags Flags) profiles.Profile{
 	gpu.ProfileName: func(flags Flags) profiles.Profile {
 		return gpu.NewProfile(flags.nodeName, flags.numDevices, flags.gpuPartitions, flags.gpuDeviceStatus)
+	},
+	vfiogpu.ProfileName: func(flags Flags) profiles.Profile {
+		return vfiogpu.NewProfile(flags.nodeName, flags.driverName)
 	},
 }
 
