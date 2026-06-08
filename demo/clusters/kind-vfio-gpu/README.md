@@ -44,6 +44,8 @@ kernel modules and the host setup wrapper:
 
 > [`kubevirt/kubevirt:kubevirtci/cluster-up/cluster/kind-1.35-vfio-gpu`](https://github.com/kubevirt/kubevirt/tree/main/kubevirtci/cluster-up/cluster/kind-1.35-vfio-gpu)
 
+It has not merged yet, find the kubevirt provider CI lane here - https://github.com/kubevirt/kubevirtci/pull/1726/changes
+
 Readme has all the steps
 
 Obtain the provider directory however suits you — clone the kubevirt repo,

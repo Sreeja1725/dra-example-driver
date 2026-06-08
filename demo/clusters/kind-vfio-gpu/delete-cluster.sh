@@ -23,17 +23,11 @@ set -o pipefail
 
 : "${KIND_CLUSTER_NAME:=kind-vfio-gpu}"
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-log_info() { printf "${GREEN}[INFO]${NC} %s\n" "$*"; }
-log_warn() { printf "${YELLOW}[WARN]${NC} %s\n" "$*"; }
-
 if kind get clusters 2>/dev/null | grep -qx "${KIND_CLUSTER_NAME}"; then
-    log_info "Deleting kind cluster ${KIND_CLUSTER_NAME}"
+    echo "Deleting kind cluster ${KIND_CLUSTER_NAME}"
     kind delete cluster --name "${KIND_CLUSTER_NAME}"
 else
-    log_warn "kind cluster ${KIND_CLUSTER_NAME} not found - skipping"
+    echo "kind cluster ${KIND_CLUSTER_NAME} not found - skipping"
 fi
 
 kubectl config delete-context "kind-${KIND_CLUSTER_NAME}" >/dev/null 2>&1 || true

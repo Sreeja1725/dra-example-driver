@@ -37,30 +37,28 @@ import (
 	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
 	cdispec "tags.cncf.io/container-device-interface/specs-go"
 
-	configapi "sigs.k8s.io/dra-example-driver/api/example.com/resource/vfio-gpu/v1alpha1"
+	configapi "sigs.k8s.io/dra-example-driver/api/example.com/resource/gpu/v1alpha1"
 	"sigs.k8s.io/dra-example-driver/internal/profiles"
 )
 
 const ProfileName = "vfio-gpu"
 
-const (
-	VendorIDAttribute resourceapi.QualifiedName = "VendorID"
-
-	DeviceIDAttribute resourceapi.QualifiedName = "DeviceID"
-
-	ClassAttribute resourceapi.QualifiedName = "Class"
-
-	IommuGroupAttribute resourceapi.QualifiedName = "iommuGroup"
-)
-
 // Profile is the vfio-gpu device profile. It advertises one DRA
 // device per PCI BDF symlink found under [DefaultSysfsRoot] (the
 // kernel-supplied list of devices already bound to vfio-pci) and
-// surfaces their attributes (PCI bus ID, vendor/device/class, IOMMU
-// group) in the published ResourceSlice.
+// surfaces their attributes (PCI bus ID, PCIe root, vendor/device/class,
+// IOMMU group) in the published ResourceSlice.
 type Profile struct {
 	nodeName   string
 	driverName string
+	sysfsRoot  string
+}
+
+func (p Profile) resolvedSysfsRoot() string {
+	if p.sysfsRoot != "" {
+		return p.sysfsRoot
+	}
+	return DefaultSysfsRoot
 }
 
 func NewProfile(nodeName, driverName string) Profile {
@@ -76,12 +74,13 @@ func deviceName(index int) string {
 
 // scanByName runs ScanSysfs and returns the results keyed by the DRA
 // device name that EnumerateDevices assigned.
-func (p Profile) scanByName() (map[string]SysfsDevice, error) {
-	scanned, err := ScanSysfs(DefaultSysfsRoot)
+func (p Profile) scanByName() (map[string]vfioPciDevice, error) {
+	root := p.resolvedSysfsRoot()
+	scanned, err := scanSysfs(root)
 	if err != nil {
-		return nil, fmt.Errorf("scan vfio-pci sysfs at %q: %w", DefaultSysfsRoot, err)
+		return nil, fmt.Errorf("scan vfio-pci sysfs at %q: %w", root, err)
 	}
-	out := make(map[string]SysfsDevice, len(scanned))
+	out := make(map[string]vfioPciDevice, len(scanned))
 	for i, s := range scanned {
 		out[deviceName(i)] = s
 	}
@@ -91,32 +90,41 @@ func (p Profile) scanByName() (map[string]SysfsDevice, error) {
 // EnumerateDevices implements [profiles.Profile]. It scans the
 // configured vfio-gpu sysfs tree and returns one DRA device per BDF.
 func (p Profile) EnumerateDevices() (resourceslice.DriverResources, error) {
-	scanned, err := ScanSysfs(DefaultSysfsRoot)
+	root := p.resolvedSysfsRoot()
+	scanned, err := scanSysfs(root)
 	if err != nil {
-		return resourceslice.DriverResources{}, fmt.Errorf("scan vfio-pci sysfs at %q: %w", DefaultSysfsRoot, err)
+		return resourceslice.DriverResources{}, fmt.Errorf("scan vfio-pci sysfs at %q: %w", root, err)
 	}
 
 	devices := make([]resourceapi.Device, 0, len(scanned))
 	for i, s := range scanned {
 		attrs := map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
 			"index":           {IntValue: ptr.To(int64(i))},
-			VendorIDAttribute: {StringValue: ptr.To(s.VendorID)},
-			DeviceIDAttribute: {StringValue: ptr.To(s.DeviceID)},
+			"vendorID":        {StringValue: ptr.To(s.vendorID)},
+			"deviceID":        {StringValue: ptr.To(s.deviceID)},
 			"driverVersion":   {VersionValue: ptr.To("1.0.0")},
 		}
 
-		if bdf, err := deviceattribute.GetPCIBusIDAttribute(s.PCIAddress); err == nil {
-			attrs[bdf.Name] = bdf.Value
-		}
-
-		if s.Class != "" {
-			attrs[ClassAttribute] = resourceapi.DeviceAttribute{
-				StringValue: ptr.To(s.Class),
+		if s.pciAddress != "" {
+			attrs[deviceattribute.StandardDeviceAttributePCIBusID] = resourceapi.DeviceAttribute{
+				StringValue: ptr.To(s.pciAddress),
 			}
 		}
-		if s.IommuGroup >= 0 {
-			attrs[IommuGroupAttribute] = resourceapi.DeviceAttribute{
-				IntValue: ptr.To(s.IommuGroup),
+
+		if s.class != "" {
+			attrs["class"] = resourceapi.DeviceAttribute{
+				StringValue: ptr.To(s.class),
+			}
+		}
+		if s.iommuGroup >= 0 {
+			attrs["iommuGroup"] = resourceapi.DeviceAttribute{
+				IntValue: ptr.To(s.iommuGroup),
+			}
+		}
+
+		if s.pcieRoot != "" {
+			attrs[deviceattribute.StandardDeviceAttributePCIeRoot] = resourceapi.DeviceAttribute{
+				StringValue: ptr.To(s.pcieRoot),
 			}
 		}
 
@@ -140,18 +148,18 @@ func (p Profile) SchemeBuilder() runtime.SchemeBuilder {
 }
 
 func (p Profile) Validate(config runtime.Object) error {
-	cfg, ok := config.(*configapi.VfioConfig)
+	cfg, ok := config.(*configapi.GpuConfig)
 	if !ok {
-		return fmt.Errorf("expected v1alpha1.VfioConfig but got: %T", config)
+		return fmt.Errorf("expected v1alpha1.GpuConfig but got: %T", config)
 	}
 	return cfg.Validate()
 }
 
 func (p Profile) ApplyConfig(config runtime.Object, results []*resourceapi.DeviceRequestAllocationResult) (profiles.PerDeviceCDIContainerEdits, error) {
 	if config == nil {
-		config = configapi.DefaultVfioConfig()
+		config = configapi.DefaultVfioGpuConfig()
 	}
-	cfg, ok := config.(*configapi.VfioConfig)
+	cfg, ok := config.(*configapi.GpuConfig)
 	if !ok {
 		return nil, fmt.Errorf("runtime object is not a recognized configuration: %T", config)
 	}
@@ -177,13 +185,13 @@ func (p Profile) ApplyConfig(config runtime.Object, results []*resourceapi.Devic
 		if !ok {
 			return nil, fmt.Errorf("vfio-gpu sysfs scan no longer sees allocated device %q (currently visible: %d); was it unbound from vfio-pci?", result.Device, len(devices))
 		}
-		if dev.IommuGroup < 0 {
-			return nil, fmt.Errorf("vfio-gpu device %q (BDF %s) has no IOMMU group; the kernel must be booted with intel_iommu=on / amd_iommu=on for vfio-pci passthrough", result.Device, dev.PCIAddress)
+		if dev.iommuGroup < 0 {
+			return nil, fmt.Errorf("vfio-gpu device %q (BDF %s) has no IOMMU group; the kernel must be booted with intel_iommu=on / amd_iommu=on for vfio-pci passthrough", result.Device, dev.pciAddress)
 		}
 
 		edits := &cdispec.ContainerEdits{
 			DeviceNodes: []*cdispec.DeviceNode{
-				{Path: fmt.Sprintf("/dev/vfio/%d", dev.IommuGroup), Permissions: "rwm"},
+				{Path: fmt.Sprintf("/dev/vfio/%d", dev.iommuGroup), Permissions: "rwm"},
 				{Path: "/dev/vfio/vfio", Permissions: "rwm"},
 			},
 		}

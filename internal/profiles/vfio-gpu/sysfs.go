@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"k8s.io/dynamic-resource-allocation/deviceattribute"
+	"k8s.io/klog/v2"
 )
 
 // DefaultSysfsRoot is the kernel-supplied directory listing every PCI
@@ -32,37 +34,16 @@ import (
 // live.
 const DefaultSysfsRoot = "/sys/bus/pci/drivers/vfio-pci"
 
-var pciAddressRegexp = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$`)
-
-type SysfsDevice struct {
-	// PCIAddress is the canonical BDF, e.g. "0000:65:00.0".
-	PCIAddress string
-
-	// VendorID is the PCI vendor ID as a lowercase 4-digit hex string
-	// without the "0x" prefix, e.g. "10de".
-	VendorID string
-
-	// DeviceID is the PCI device ID as a lowercase 4-digit hex string
-	// without the "0x" prefix, e.g. "20c2".
-	DeviceID string
-
-	// Class is the PCI class code as a lowercase 6-digit hex string
-	// without the "0x" prefix, e.g. "030200". Optional - empty when
-	// the kernel did not expose a class file.
-	Class string
-
-	// IommuGroup is the IOMMU group number the device is a member of.
-	// Present whenever the host kernel has IOMMU enabled. We
-	// defensively report -1 when the kernel symlink is missing rather
-	// than failing the whole scan; vfio-pci passthrough cannot be
-	// done for such devices.
-	IommuGroup int64
+type vfioPciDevice struct {
+	pciAddress string
+	vendorID   string
+	deviceID   string
+	class      string
+	iommuGroup int64
+	pcieRoot   string
 }
 
-// ScanSysfs walks `root` (typically [DefaultSysfsRoot]) and returns
-// one [SysfsDevice] per PCI BDF symlink found.
-// Devices are returned in lexicographic PCI-address order.
-func ScanSysfs(root string) ([]SysfsDevice, error) {
+func scanSysfs(root string) ([]vfioPciDevice, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -71,15 +52,16 @@ func ScanSysfs(root string) ([]SysfsDevice, error) {
 		return nil, fmt.Errorf("read vfio-gpu sysfs root %q: %w", root, err)
 	}
 
-	devices := make([]SysfsDevice, 0, len(entries))
+	devices := make([]vfioPciDevice, 0, len(entries))
 	for _, entry := range entries {
 		name := entry.Name()
-		if !pciAddressRegexp.MatchString(name) {
+		_, err := deviceattribute.GetPCIBusIDAttribute(name)
+		if err != nil {
 			continue
 		}
 
 		devicePath := filepath.Join(root, name)
-		dev, err := readPCIDevice(devicePath, name)
+		dev, err := readPCIDevice(devicePath, name, sysfsRootFromVFIO(root))
 		if err != nil {
 			continue
 		}
@@ -87,10 +69,16 @@ func ScanSysfs(root string) ([]SysfsDevice, error) {
 	}
 
 	sort.Slice(devices, func(i, j int) bool {
-		return devices[i].PCIAddress < devices[j].PCIAddress
+		return devices[i].pciAddress < devices[j].pciAddress
 	})
 
 	return devices, nil
+}
+
+// sysfsRootFromVFIO maps a vfio-pci driver directory to the sysfs root
+// that contains bus/, devices/, etc. For [DefaultSysfsRoot] this is /sys.
+func sysfsRootFromVFIO(vfioRoot string) string {
+	return filepath.Clean(filepath.Join(vfioRoot, "..", "..", "..", ".."))
 }
 
 // readPCIDevice resolves a single PCI sysfs entry under
@@ -98,14 +86,15 @@ func ScanSysfs(root string) ([]SysfsDevice, error) {
 // this BDF passthrough-ready; per-device files (vendor, device,
 // class, iommu_group) are read through the symlink into
 // /sys/devices/.../<BDF>/.
-func readPCIDevice(devicePath, address string) (SysfsDevice, error) {
+func readPCIDevice(devicePath, address, sysfsRoot string) (vfioPciDevice, error) {
+	klog.Infof("devicePath: %s", devicePath)
 	vendor, err := readHexFile(filepath.Join(devicePath, "vendor"))
 	if err != nil {
-		return SysfsDevice{}, fmt.Errorf("read vendor for %q: %w", address, err)
+		return vfioPciDevice{}, fmt.Errorf("read vendor for %q: %w", address, err)
 	}
 	device, err := readHexFile(filepath.Join(devicePath, "device"))
 	if err != nil {
-		return SysfsDevice{}, fmt.Errorf("read device for %q: %w", address, err)
+		return vfioPciDevice{}, fmt.Errorf("read device for %q: %w", address, err)
 	}
 
 	class, _ := readHexFile(filepath.Join(devicePath, "class"))
@@ -115,12 +104,22 @@ func readPCIDevice(devicePath, address string) (SysfsDevice, error) {
 		iommuGroup = -1
 	}
 
-	return SysfsDevice{
-		PCIAddress: address,
-		VendorID:   vendor,
-		DeviceID:   device,
-		Class:      class,
-		IommuGroup: iommuGroup,
+	pcieRoot := ""
+	if pciRootAttr, err := deviceattribute.GetPCIeRootAttributeByPCIBusID(
+		address,
+		deviceattribute.WithFSFromRoot(sysfsRoot),
+	); err == nil && pciRootAttr.Value.StringValue != nil {
+		pcieRoot = *pciRootAttr.Value.StringValue
+	}
+
+	klog.Infof("pcieRoot: %s", pcieRoot)
+	return vfioPciDevice{
+		pciAddress: address,
+		pcieRoot:   pcieRoot,
+		vendorID:   vendor,
+		deviceID:   device,
+		class:      class,
+		iommuGroup: iommuGroup,
 	}, nil
 }
 

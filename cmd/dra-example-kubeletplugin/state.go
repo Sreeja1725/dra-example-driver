@@ -201,7 +201,8 @@ func (s *DeviceState) Unprepare(claimUID types.UID) error {
 	}
 	s.removeClaimFromCheckpoint(checkpoint, claimUID)
 
-	if err := s.cdi.DeleteClaimSpecFile(string(claimUID)); err != nil {
+	err = s.cdi.DeleteClaimSpecFile(string(claimUID))
+	if err != nil {
 		return fmt.Errorf("unable to delete CDI spec file for claim: %v", err)
 	}
 
@@ -318,7 +319,10 @@ func (s *DeviceState) computeDeviceConfig(claim *resourceapi.ResourceClaim) (Pre
 			return nil, fmt.Errorf("error applying config: %w", err)
 		}
 
-		mergeEdits(perDeviceCDIContainerEdits, containerEdits)
+		// Merge any new container edits with the overall per device map.
+		for k, v := range containerEdits {
+			perDeviceCDIContainerEdits[k] = v
+		}
 	}
 
 	// Walk through each config and its associated device allocation results
@@ -487,20 +491,4 @@ func (s *DeviceState) updateDeviceStatus(ctx context.Context, ns, name string, d
 		_, err = rc.UpdateStatus(ctx, claim, metav1.UpdateOptions{})
 		return err
 	})
-}
-
-// mergeEdits appends src into dst on a per-device basis. Empty entries in
-// src are ignored. ContainerEdits.Append handles deduplication and ordering.
-func mergeEdits(dst profiles.PerDeviceCDIContainerEdits, src profiles.PerDeviceCDIContainerEdits) {
-	for device, edit := range src {
-		if edit == nil {
-			continue
-		}
-		if existing := dst[device]; existing != nil {
-			existing.Append(edit)
-			dst[device] = existing
-			continue
-		}
-		dst[device] = edit
-	}
 }
