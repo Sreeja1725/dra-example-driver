@@ -61,8 +61,10 @@ spec:
         env:
         - name: DRIVER_NAME
           value: {{ include "dra-example-driver.driverName" . | quote }}
-        - name: DEVICE_PROFILE
-          value: {{ .Values.deviceProfile | quote }}
+        {{- if .Values.featureGates }}
+        - name: FEATURE_GATES
+          value: "{{ range $key, $value := .Values.featureGates }}{{ $key }}={{ $value }},{{ end }}"
+        {{- end }}
         - name: CDI_ROOT
           value: /var/run/cdi
         - name: KUBELET_REGISTRAR_DIRECTORY_PATH
@@ -105,7 +107,7 @@ spec:
           mountPath: {{ .Values.kubeletPlugin.kubeletPluginsDirectoryPath | quote }}
         - name: cdi
           mountPath: /var/run/cdi
-        {{- if eq .Values.deviceProfile "vfio-gpu" }}
+        {{- if eq (include "dra-example-driver.vfioGPUEnabled" .) "true" }}
         - name: host-pci-bus
           mountPath: /sys/bus/pci
           readOnly: true
@@ -125,7 +127,7 @@ spec:
       - name: cdi
         hostPath:
           path: /var/run/cdi
-      {{- if eq .Values.deviceProfile "vfio-gpu" }}
+      {{- if eq (include "dra-example-driver.vfioGPUEnabled" .) "true" }}
       - name: host-pci-bus
         hostPath:
           path: /sys/bus/pci

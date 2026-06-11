@@ -123,8 +123,21 @@ resource.k8s.io/v1beta1
 {{- end -}}
 
 {{/*
+Whether vfio-gpu mode is active at deploy time (VFIOGPU feature gate).
+*/}}
+{{- define "dra-example-driver.vfioGPUEnabled" -}}
+{{- if and .Values.featureGates (index .Values.featureGates "VFIOGPU") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 The driver name.
 */}}
 {{- define "dra-example-driver.driverName" -}}
-{{ default (print .Values.deviceProfile ".example.com") .Values.driverName }}
+{{- if .Values.driverName -}}
+{{- .Values.driverName -}}
+{{- else if eq (include "dra-example-driver.vfioGPUEnabled" .) "true" -}}
+vfio-gpu.example.com
+{{- else -}}
+gpu.example.com
+{{- end -}}
 {{- end -}}

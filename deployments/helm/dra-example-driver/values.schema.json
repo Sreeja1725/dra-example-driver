@@ -1,12 +1,11 @@
 {
   "type": "object",
   "properties": {
-    "deviceProfile": {
-      "type": "string",
-      "enum": [
-        "gpu",
-        "vfio-gpu"
-      ]
+    "featureGates": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
     }
   }
 }
