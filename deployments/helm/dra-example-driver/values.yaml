@@ -112,6 +112,7 @@ kubeletPlugin:
   # devices report healthy until pinned via a health.example.com/<device>
   # annotation on the driver pod, which keeps the demo deterministic.
   simulateHealthChanges: false
+  enableDeviceMetadata: false
   containers:
     init:
       securityContext: {}
